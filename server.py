@@ -18,6 +18,7 @@ import numpy as np
 from aiohttp import web
 from aiortc import RTCPeerConnection, RTCSessionDescription
 from aiortc.mediastreams import AudioFrame, MediaStreamTrack
+import config
 
 ROOT = Path(__file__).parent.resolve()
 logging.basicConfig(level=logging.INFO, format="%(name)s: %(message)s")
@@ -29,10 +30,6 @@ if not CEREBRAS_API_KEY:
 
 PORT = int(os.environ.get("PORT", "7860"))
 
-SAMPLE_RATE = 16000
-STT_MODEL = "mlx-community/whisper-small-mlx"
-TTS_SAMPLE_RATE = 24000
-LLM_MODEL_ID = "qwen-3-235b-a22b-instruct-2507"
 
 
 def load_system_prompt() -> str:
@@ -251,8 +248,8 @@ async def start_server():
     # Warm STT
     try:
         import mlx_whisper
-        silence = np.zeros(SAMPLE_RATE, dtype=np.float32)
-        mlx_whisper.transcribe(silence, path_or_hf_repo=STT_MODEL)
+        silence = np.zeros(config.SAMPLE_RATE, dtype=np.float32)
+        mlx_whisper.transcribe(silence, path_or_hf_repo=config.STT_MODEL)
         logger.info("STT warmed")
     except Exception as e:
         logger.warning(f"STT warm failed: {e}")

@@ -145,19 +145,85 @@ http://192.168.1.42:7860
 
 ## Configuration
 
-All constants live in `config.py`:
+All settings are in `config.py` and can be overridden via environment variables.
+See `.env.example` for all available options.
 
-| Constant | Default | Description |
+### Required
+
+| Variable | Description |
+|----------|-------------|
+| `CEREBRAS_API_KEY` | Your Cerebras Cloud API key |
+
+### Optional — LLM
+
+| Variable | Default | Description |
 |----------|---------|-------------|
-| `LLM_MODEL_ID` | `qwen-3-235b-a22b-instruct-2507` | Cerebras LLM |
-| `TTS_MODEL` | `mlx-community/Chatterbox-Turbo-TTS-4bit` | TTS model |
-| `STT_MODEL` | `mlx-community/whisper-small-mlx` | Whisper STT |
+| `LLM_MODEL_ID` | `qwen-3-235b-a22b-instruct-2507` | Cerebras model |
 | `LLM_TEMPERATURE` | `0.8` | Sampling temperature |
 | `LLM_TOP_P` | `0.88` | Top-p sampling |
+| `LLM_MAX_TOKENS` | `512` | Max tokens per response |
 | `LLM_MAX_RETRIES` | `3` | Retry attempts on 429 |
-| `LLM_RETRY_BASE_DELAY` | `2` | Base delay for exponential backoff |
+| `LLM_RETRY_BASE_DELAY` | `2` | Base delay for backoff |
 
-The system prompt is loaded from `prompts/system.txt`.
+### Optional — STT
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `STT_MODEL` | `mlx-community/whisper-small-mlx` | Whisper model |
+| `STT_LANGUAGE` | `en` | Language code |
+| `STT_NO_SPEECH_THRESHOLD` | `0.6` | No-speech probability threshold |
+
+### Optional — TTS
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `TTS_MODEL` | `mlx-community/Chatterbox-Turbo-TTS-4bit` | TTS model |
+| `TTS_TEMPERATURE` | `0.6` | TTS sampling temperature |
+| `TTS_SAMPLE_RATE` | `24000` | TTS output sample rate |
+
+### Optional — VAD
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `VAD_SPEECH_PROB_THRESHOLD` | `0.5` | Speech probability threshold |
+| `VAD_MIN_SPEECH_DURATION_S` | `0.4` | Minimum speech before trigger |
+| `VAD_MAX_SILENCE_DURATION_S` | `2.4` | Max silence before end-of-speech |
+
+### Optional — Barge-in
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `BARGE_IN_THRESHOLD_S` | `0.250` | Barge-in threshold in seconds |
+| `BARGE_IN_VAD_FRAMES` | `8` | VAD frames before interrupting |
+
+### Optional — Server
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PORT` | `7860` | HTTP server port |
+
+### Optional — Agent
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `SYSTEM_PROMPT_FILE` | `prompts/system.txt` | System prompt file |
+| `MAX_RESPONSE_SENTENCES` | `3` | Max sentences per response |
+| `RESPONSE_TIMEOUT_S` | `15` | Response timeout |
+
+### System prompt
+
+Edit `prompts/system.txt` to change the agent's behavior.
+
+Example:
+
+```
+You are a helpful customer support assistant for Acme Dental.
+
+Answer questions about appointments, insurance, and procedures.
+Keep responses concise and friendly.
+```
+
+No code changes needed — just edit the text file and restart.
 
 ---
 

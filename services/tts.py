@@ -22,7 +22,7 @@ def synthesize(text):
                 results = list(
                     state.tts_model.generate(
                         text,
-                        temperature=config.LLM_TEMPERATURE,
+                        temperature=config.TTS_TEMPERATURE,
                         ref_audio=None,
                         language="en",
                     )
