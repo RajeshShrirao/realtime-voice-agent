@@ -16,6 +16,7 @@ from services.vad import load_vad, is_speech
 from services.stt import transcribe
 from services.llm import generate_stream
 from services.tts import synthesize
+import config
 from audio.formats import (
     SAMPLE_RATE,
     VAD_CHUNK_SAMPLES,
@@ -121,26 +122,41 @@ class VoiceAgent:
             time.sleep(0.01)
 
     def _process_audio(self) -> None:
-        """Process buffered audio: VAD detection, STT, LLM, TTS."""
+        """Process buffered audio: VAD detection, STT, LLM, TTS.
+
+        Uses a sliding window of recent frames for VAD decision to reduce
+        false positives from single-frame noise spikes.
+        """
         with self._lock:
             if not self._audio_buffer:
                 return
 
-            recent = self._audio_buffer[-1] if self._audio_buffer else np.array([])
-            if len(recent) < VAD_CHUNK_SAMPLES:
+            # Need enough frames for a reasonable VAD window
+            window_size = 3  # Check last 3 frames
+            if len(self._audio_buffer) < window_size:
                 return
 
-            speaking = (
-                is_speech(recent, self._vad_model, SAMPLE_RATE)
-                if self._vad_model
-                else True
+            # Get recent frames for VAD
+            recent_frames = self._audio_buffer[-window_size:]
+            valid_frames = [f for f in recent_frames if len(f) >= VAD_CHUNK_SAMPLES]
+            if not valid_frames:
+                return
+
+            # VAD: majority vote over recent frames
+            speech_votes = sum(
+                1 for f in valid_frames
+                if is_speech(f, self._vad_model, SAMPLE_RATE)
             )
+            speaking = speech_votes >= (len(valid_frames) // 2 + 1)
 
             if speaking:
                 self._speaking = True
                 self._silence_streak = 0
                 self._speech_chunk_count += 1
-                self._speech_samples.append(recent.copy())
+                # Keep last 30 chunks of speech audio for STT
+                self._speech_samples.append(recent_frames[-1].copy())
+                if len(self._speech_samples) > 30:
+                    self._speech_samples = self._speech_samples[-30:]
 
                 if self._on_listening:
                     self._on_listening()
@@ -148,8 +164,12 @@ class VoiceAgent:
                 self._silence_streak += 1
 
             # Check for end of speech
-            min_speech_chunks = int(SAMPLE_RATE * 0.4 / VAD_CHUNK_SAMPLES)
-            max_silence_chunks = int(SAMPLE_RATE * 2.4 / VAD_CHUNK_SAMPLES)
+            min_speech_chunks = int(
+                config.VAD_MIN_SPEECH_DURATION_S * SAMPLE_RATE / VAD_CHUNK_SAMPLES
+            )
+            max_silence_chunks = int(
+                config.VAD_MAX_SILENCE_DURATION_S * SAMPLE_RATE / VAD_CHUNK_SAMPLES
+            )
 
             if (
                 self._speaking
