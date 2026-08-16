@@ -1,5 +1,6 @@
 numpy
 torch
+torchaudio
 sounddevice
 mlx-whisper
 mlx-audio
