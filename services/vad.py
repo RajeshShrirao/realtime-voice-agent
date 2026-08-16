@@ -9,7 +9,7 @@ def load_vad() -> torch.nn.Module:
         model="silero_vad",
         force_reload=False,
         onnx=False,
-        trust_repo="check",
+        trust_repo=True,
     )
     return model
 
