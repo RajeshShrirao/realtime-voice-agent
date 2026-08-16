@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>Voice Agent</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="container">
+    <div class="logo">Realtime Voice Agent</div>
+
+    <div class="status" id="status">
+      <div class="dot" id="statusDot"></div>
+      <div class="status-label" id="statusLabel">READY</div>
+    </div>
+
+    <button id="mainBtn" class="btn-primary">Start Call</button>
+
+    <div class="error-msg" id="errorMsg"></div>
+
+    <div class="hint">Same Wi-Fi required. Your browser handles the call.</div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,9 @@
+numpy
+torch
+sounddevice
+mlx-whisper
+mlx-audio
+huggingface_hub
+cerebras-cloud-sdk
+aiohttp
+aiortc

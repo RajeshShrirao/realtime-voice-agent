@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+.venv/
+.claude/
+/target
+*.wav
+*.mp3
+*.png
+*.moc3
+*.physics3.json
+*.cdi3.json
+*.vtube.json
+model3.json
