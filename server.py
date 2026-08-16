@@ -12,9 +12,12 @@ import logging
 import os
 import sys
 from pathlib import Path
+from typing import Optional
 
+import numpy as np
 from aiohttp import web
 from aiortc import RTCPeerConnection, RTCSessionDescription
+from aiortc.mediastreams import AudioFrame, MediaStreamTrack
 
 ROOT = Path(__file__).parent.resolve()
 logging.basicConfig(level=logging.INFO, format="%(name)s: %(message)s")
@@ -26,10 +29,9 @@ if not CEREBRAS_API_KEY:
 
 PORT = int(os.environ.get("PORT", "7860"))
 
-# Config constants
 SAMPLE_RATE = 16000
 STT_MODEL = "mlx-community/whisper-small-mlx"
-TTS_MODEL = "mlx-community/Chatterbox-Turbo-TTS-4bit"
+TTS_SAMPLE_RATE = 24000
 LLM_MODEL_ID = "qwen-3-235b-a22b-instruct-2507"
 
 
@@ -40,16 +42,84 @@ def load_system_prompt() -> str:
     return "You are a helpful assistant."
 
 
+def audioframe_to_numpy(frame: AudioFrame) -> np.ndarray:
+    """Convert an aiortc AudioFrame to a 1D numpy float32 array."""
+    arr = frame.to_ndarray()  # shape (channels, samples)
+    return arr.flatten().astype(np.float32)
+
+
+class AudioSenderTrack(MediaStreamTrack):
+    """MediaStreamTrack that sends queued TTS audio to the browser."""
+
+    kind = "audio"
+
+    def __init__(self, sample_rate: int, queue: asyncio.Queue):
+        super().__init__()
+        self._sample_rate = sample_rate
+        self._queue = queue
+        self._timestamp = 0
+        self._frame_count = 0
+
+    async def recv(self) -> Optional[AudioFrame]:
+        try:
+            audio = await asyncio.wait_for(self._queue.get(), timeout=0.5)
+        except asyncio.TimeoutError:
+            audio = None
+
+        if audio is None or len(audio) == 0:
+            # Send silence: 160 samples (10ms at 16kHz, but we use 24kHz TTS sr)
+            silence = np.zeros((1, 240), dtype=np.float32)  # 10ms at 24kHz
+            frame = AudioFrame.from_ndarray(silence, format="fltp", layout="mono")
+            frame.sample_rate = self._sample_rate
+            frame.pts = self._timestamp
+            self._timestamp += 240
+            self._frame_count += 1
+            return frame
+
+        # Convert 1D numpy to 2D for AudioFrame (channels, samples)
+        audio = np.asarray(audio, dtype=np.float32)
+        if audio.ndim == 1:
+            audio_2d = audio.reshape(1, -1)
+        else:
+            audio_2d = audio
+
+        frame = AudioFrame.from_ndarray(audio_2d, format="fltp", layout="mono")
+        frame.sample_rate = self._sample_rate
+        frame.pts = self._timestamp
+        self._timestamp += len(audio_2d[0])
+        self._frame_count += 1
+        return frame
+
+
 async def handle_signaling(request: web.Request) -> web.Response:
     ws = web.WebSocketResponse()
     await ws.prepare(request)
 
     logger.info("WebSocket connection opened")
 
-    pc = RTCPeerConnection()
+    pc: Optional[RTCPeerConnection] = None
     pipeline_ref = request.app.get("pipeline")
     agent_ref = request.app.get("agent")
     call_active = False
+    audio_queue: asyncio.Queue = asyncio.Queue()
+    sender_track: Optional[AudioSenderTrack] = None
+
+    async def cleanup():
+        nonlocal pc, sender_track, call_active
+        call_active = False
+        if sender_track:
+            try:
+                sender_track._queue.put_nowait(None)
+            except Exception:
+                pass
+        if pc:
+            await pc.close()
+        await ws.close()
+        if pipeline_ref:
+            pipeline_ref.stop()
+        if agent_ref:
+            agent_ref.stop()
+        logger.info("Call cleanup complete")
 
     async for msg in ws:
         try:
@@ -57,11 +127,17 @@ async def handle_signaling(request: web.Request) -> web.Response:
             action = data.get("action")
 
             if action == "offer":
-                logger.info("Received offer")
+                logger.info("Received offer from browser")
                 offer_sdp = data.get("sdp")
                 offer_type = data.get("type", "offer")
 
+                pc = RTCPeerConnection()
                 await pc.setRemoteDescription(RTCSessionDescription(offer_sdp, offer_type))
+
+                # Create audio sender track and add to PC
+                sender_track = AudioSenderTrack(TTS_SAMPLE_RATE, audio_queue)
+                pc.addTrack(sender_track)
+
                 answer = await pc.createAnswer()
                 await pc.setLocalDescription(answer)
 
@@ -70,17 +146,20 @@ async def handle_signaling(request: web.Request) -> web.Response:
                     "sdp": pc.localDescription.sdp,
                     "type": pc.localDescription.type,
                 })
-                logger.info("Sent answer")
+                logger.info("Sent answer to browser")
                 call_active = True
 
+                # ICE connected → start pipeline
                 @pc.on("iceconnectionstatechange")
                 async def on_ice_state():
                     state = pc.iceConnectionState
                     logger.info(f"ICE state: {state}")
                     if state == "connected":
-                        logger.info("WebRTC connected")
+                        logger.info("WebRTC connected — starting pipeline")
                         if pipeline_ref:
                             pipeline_ref.start()
+                        if pipeline_ref:
+                            pipeline_ref.set_audio_sender_queue(audio_queue)
                         await ws.send_json({"action": "connected"})
 
                 @pc.on("connectionstatechange")
@@ -88,17 +167,12 @@ async def handle_signaling(request: web.Request) -> web.Response:
                     state = pc.connectionState
                     logger.info(f"Connection state: {state}")
                     if state in ("closed", "failed", "disconnected"):
-                        logger.info("WebRTC disconnected")
-                        if pipeline_ref:
-                            pipeline_ref.stop()
-                        if agent_ref:
-                            agent_ref.stop()
-                        await ws.close()
+                        await cleanup()
 
                 @pc.on("track")
                 def on_track(track):
                     if track.kind == "audio":
-                        logger.info("Audio track received")
+                        logger.info("Audio track received from browser")
 
                         async def receive_audio():
                             try:
@@ -106,9 +180,8 @@ async def handle_signaling(request: web.Request) -> web.Response:
                                     frame = await track.recv()
                                     if frame is None:
                                         break
-                                    import numpy as np
-                                    audio = np.array(frame.samples, dtype=np.float32)
-                                    if pipeline_ref:
+                                    audio = audioframe_to_numpy(frame)
+                                    if pipeline_ref and call_active:
                                         pipeline_ref.on_audio_received(audio)
                             except asyncio.CancelledError:
                                 pass
@@ -118,15 +191,15 @@ async def handle_signaling(request: web.Request) -> web.Response:
                         asyncio.create_task(receive_audio())
 
             elif action == "end_call":
-                logger.info("End call requested")
-                call_active = False
+                logger.info("End call requested by browser")
+                await cleanup()
+
+            elif action == "barge_in":
+                logger.info("Barge-in detected from browser")
                 if pipeline_ref:
-                    pipeline_ref.stop()
+                    pipeline_ref.interrupt()
                 if agent_ref:
-                    agent_ref.stop()
-                await pc.close()
-                await ws.close()
-                break
+                    agent_ref.interrupt()
 
         except json.JSONDecodeError:
             logger.warning("Invalid JSON from client")
@@ -138,12 +211,7 @@ async def handle_signaling(request: web.Request) -> web.Response:
                 pass
 
     logger.info("WebSocket connection closed")
-    if call_active:
-        if pipeline_ref:
-            pipeline_ref.stop()
-        if agent_ref:
-            agent_ref.stop()
-    await pc.close()
+    await cleanup()
     return ws
 
 
@@ -182,7 +250,6 @@ async def start_server():
 
     # Warm STT
     try:
-        import numpy as np
         import mlx_whisper
         silence = np.zeros(SAMPLE_RATE, dtype=np.float32)
         mlx_whisper.transcribe(silence, path_or_hf_repo=STT_MODEL)
